@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/mirzapolat/soundcloud-download-helper
 // @downloadURL  https://raw.githubusercontent.com/mirzapolat/soundcloud-download-helper/main/soundcloud-downloader.user.js
 // @updateURL    https://raw.githubusercontent.com/mirzapolat/soundcloud-download-helper/main/soundcloud-downloader.user.js
-// @version      1.7.1
+// @version      1.8.1
 // @description  Download SoundCloud tracks as MP3 with ID3v2 tags, metadata preview, cancel support, a batch download queue (ZIP) and a freely draggable button
 // @author       mirzapolat
 // @match        https://soundcloud.com/*
@@ -82,6 +82,10 @@
     busy: 'A download is already running.',
     noTrack: 'Open a track page or start playing a song first.',
     untagged: 'Only AAC available → saved as .m4a without tags.',
+    drmTrack: 'DRM-protected — SoundCloud only offers this track as an encrypted stream, so it cannot be downloaded.',
+    noStream: 'SoundCloud offers no downloadable stream for this track.',
+    notAvailable: 'SoundCloud will not serve this track for download (DRM or regional restriction).',
+    notAllowed: 'Access denied by SoundCloud — try refreshing the client_id from the Tampermonkey menu.',
     by: 'by',
     dragHint: 'Drag to move · double-click to reset · arrow keys to nudge',
     downloadTitle: (t) => `Download "${t}" · Alt+D · Alt+Q to queue`,
@@ -294,19 +298,48 @@
     aac_96k: 'AAC 96 kbit/s',
   };
 
-  function pickTranscoding(track) {
-    const list = (track.media && track.media.transcodings) || [];
-    const is = (t, proto, mime) =>
-      t.format.protocol === proto && t.format.mime_type.startsWith(mime);
+  // SoundCloud also advertises DRM variants (ctr-/cbc-encrypted-hls). Those are
+  // encrypted streams we neither can nor should decrypt, so they are excluded.
+  const isEncrypted = (t) => /encrypted/i.test(t.format.protocol);
 
-    return (
-      list.find((t) => is(t, 'progressive', 'audio/mpeg')) ||
-      list.find((t) => is(t, 'hls', 'audio/mpeg')) ||
-      list.find((t) => t.format.protocol === 'hls' && t.preset === 'aac_160k') ||
-      list.find((t) => t.format.protocol === 'hls') ||
-      list[0] ||
-      null
-    );
+  const mimeOf = (t) => t.format.mime_type.split(';')[0].trim();
+  // audio/mpegurl is an HLS *playlist*, not an MP3 stream — startsWith('audio/mpeg')
+  // matches both, so compare exactly or a playlist gets saved as .mp3.
+  const isMp3Stream = (t) => mimeOf(t) === 'audio/mpeg';
+  const isAmbiguous = (t) => mimeOf(t) === 'audio/mpegurl';
+
+  // For adaptive streams the container is only known once bytes arrive.
+  const looksLikeMp3 = (b) =>
+    b.length > 2 &&
+    ((b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0));
+
+  const hasEncryptedOnly = (track) => {
+    const list = (track.media && track.media.transcodings) || [];
+    return list.length > 0 && list.every(isEncrypted);
+  };
+
+  // Ordered by preference. Returned as a list so a dead endpoint can fall back:
+  // SoundCloud keeps listing transcodings it no longer serves (404 with "{}").
+  function pickTranscodings(track) {
+    const list = ((track.media && track.media.transcodings) || []).filter((t) => !isEncrypted(t));
+    const ordered = [
+      ...list.filter((t) => t.format.protocol === 'progressive' && isMp3Stream(t)),
+      ...list.filter((t) => t.format.protocol === 'hls' && isMp3Stream(t)),
+      ...list.filter((t) => t.format.protocol === 'hls' && t.preset === 'aac_160k'),
+      ...list.filter((t) => t.format.protocol === 'hls' && t.preset === 'aac_96k'),
+      ...list.filter((t) => t.format.protocol === 'hls'), // abr_sq and friends last
+    ];
+    return ordered.filter((t, i) => ordered.indexOf(t) === i); // de-dupe, keep order
+  }
+
+  const pickTranscoding = (track) => pickTranscodings(track)[0] || null;
+
+  // "HTTP 404 for https://api-v2…" helps nobody; say what actually happened.
+  function friendlyError(err) {
+    const code = (/HTTP (\d{3})/.exec(err.message) || [])[1];
+    if (code === '404') return T.notAvailable;
+    if (code === '401' || code === '403') return T.notAllowed;
+    return err.message;
   }
 
   async function transcodingMediaUrl(transcoding, trackAuthorization, token) {
@@ -679,34 +712,52 @@
   // Resolves + downloads + tags one track. Returns { meta, filename, bytes, isMp3 }.
   async function prepareTrack(track, token, onStage) {
     const meta = parseMeta(track);
-    const transcoding = pickTranscoding(track);
-    if (!transcoding) throw new Error('No playable stream found for this track.');
+    const candidates = pickTranscodings(track);
 
-    const isMp3 = transcoding.format.mime_type.startsWith('audio/mpeg');
-    const ext = isMp3 ? '.mp3' : '.m4a';
-
-    const mediaUrl = await transcodingMediaUrl(transcoding, track.track_authorization, token);
-    token.check();
-
-    const audio =
-      transcoding.format.protocol === 'progressive'
-        ? await fetchProgressive(mediaUrl, token, (f, l) => onStage('progress', f, l))
-        : await fetchHls(mediaUrl, token, (f, l) => onStage('progress', f, l));
-    token.check();
-
-    let bytes;
-    if (isMp3) {
-      onStage('artwork');
-      const cover = await fetchCover(track, token);
-      token.check();
-      onStage('tagging');
-      bytes = concatBytes([buildId3(meta, cover), stripExistingId3(audio)]);
-    } else {
-      bytes = audio;
+    if (!candidates.length) {
+      throw new Error(hasEncryptedOnly(track) ? T.drmTrack : T.noStream);
     }
-    token.check();
 
-    return { meta, filename: buildFilename(meta, ext), bytes, isMp3 };
+    let lastErr = null;
+    for (const transcoding of candidates) {
+      token.check();
+      try {
+        const mediaUrl = await transcodingMediaUrl(transcoding, track.track_authorization, token);
+        token.check();
+
+        const audio =
+          transcoding.format.protocol === 'progressive'
+            ? await fetchProgressive(mediaUrl, token, (f, l) => onStage('progress', f, l))
+            : await fetchHls(mediaUrl, token, (f, l) => onStage('progress', f, l));
+        token.check();
+
+        const isMp3 = isMp3Stream(transcoding) || (isAmbiguous(transcoding) && looksLikeMp3(audio));
+        const ext = isMp3 ? '.mp3' : '.m4a';
+
+        let bytes;
+        if (isMp3) {
+          onStage('artwork');
+          const cover = await fetchCover(track, token);
+          token.check();
+          onStage('tagging');
+          bytes = concatBytes([buildId3(meta, cover), stripExistingId3(audio)]);
+        } else {
+          bytes = audio;
+        }
+        token.check();
+
+        return { meta, filename: buildFilename(meta, ext), bytes, isMp3 };
+      } catch (e) {
+        if (isCancel(e)) throw e;
+        lastErr = e;
+        console.warn('[SC-DL] transcoding failed, trying next:', transcoding.preset,
+                     transcoding.format.protocol, e.message);
+      }
+    }
+
+    // Every advertised stream refused us.
+    const encrypted = ((track.media && track.media.transcodings) || []).some(isEncrypted);
+    throw new Error(encrypted ? T.drmTrack : (lastErr ? friendlyError(lastErr) : T.noStream));
   }
 
   /* ------------------------------------------------------------------ *
@@ -1178,8 +1229,8 @@
 
       const meta = parseMeta(track);
       const transcoding = pickTranscoding(track);
-      if (!transcoding) throw new Error('No playable stream found for this track.');
-      const ext = transcoding.format.mime_type.startsWith('audio/mpeg') ? '.mp3' : '.m4a';
+      if (!transcoding) throw new Error(hasEncryptedOnly(track) ? T.drmTrack : T.noStream);
+      const ext = isMp3Stream(transcoding) ? '.mp3' : '.m4a';
 
       renderPreview(ui, track, meta, transcoding, ext);
       ui.setStatus('');
