@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/mirzapolat/soundcloud-download-helper
 // @downloadURL  https://raw.githubusercontent.com/mirzapolat/soundcloud-download-helper/main/soundcloud-downloader.user.js
 // @updateURL    https://raw.githubusercontent.com/mirzapolat/soundcloud-download-helper/main/soundcloud-downloader.user.js
-// @version      1.6.0
+// @version      1.7.1
 // @description  Download SoundCloud tracks as MP3 with ID3v2 tags, metadata preview, cancel support, a batch download queue (ZIP) and a freely draggable button
 // @author       mirzapolat
 // @match        https://soundcloud.com/*
@@ -781,12 +781,27 @@
       --g-drop: 0 10px 34px rgba(0,0,0,.42), 0 2px 8px rgba(0,0,0,.26);
       --g-inner: inset 0 1px 0 rgba(255,255,255,.30), inset 0 -1px 0 rgba(255,255,255,.07);
       --g-blur: blur(22px) saturate(185%);
+      --g-size: 52px; /* shared height of bubble, queue pill and button */
     }
     .scdl-fabs.scdl-anchor-left { align-items: flex-start; }
     .scdl-fabs.scdl-dragging { transition: none; filter: drop-shadow(0 14px 30px rgba(0,0,0,.45)); }
     /* Swallow clicks on the buttons while dragging. */
     .scdl-fabs.scdl-dragging .scdl-fab,
     .scdl-fabs.scdl-dragging .scdl-fab-dl { pointer-events: none; }
+
+    .scdl-fabs *, .scdl-fabs *::before, .scdl-fabs *::after { box-sizing: border-box; }
+
+    /* backdrop-filter + a transform on :hover/:active makes Chrome re-composite
+       the element, and for one frame it rasterises the blur without the rounded
+       clip — the pill flashes rectangular. Pre-promoting the layer and pinning
+       the clip keeps the radius stable. The tap highlight is square too. */
+    .scdl-now, .scdl-fab, .scdl-fab-dl, .scdl-grip {
+      -webkit-tap-highlight-color: transparent;
+      will-change: transform;
+      isolation: isolate;
+      overflow: hidden;
+    }
+    .scdl-now:focus, .scdl-fab:focus, .scdl-fab-dl:focus, .scdl-grip:focus { outline: none; }
 
     /* Frosted pane + specular sheen. ::before paints above the background but
        below the text, so content stays legible. */
@@ -830,18 +845,23 @@
 
     /* ---- queue pill ---- */
     .scdl-fab {
-      display: flex; align-items: center; gap: 8px;
-      padding: 9px 14px; border-radius: 999px;
-      color: #fff; font: 600 12.5px/1 Inter, system-ui, sans-serif;
+      display: flex; align-items: center; gap: 9px;
+      height: var(--g-size); padding: 0 18px; border-radius: 999px;
+      color: #fff; font: 600 13px/1 Inter, system-ui, sans-serif;
       cursor: pointer;
       transition: transform .22s cubic-bezier(.2,.85,.3,1), background .16s ease, border-color .16s ease;
     }
-    .scdl-fab:hover { background: linear-gradient(145deg, rgba(255,255,255,.26), rgba(255,255,255,.10)); }
+    .scdl-fab:hover {
+      background: linear-gradient(145deg, rgba(255,255,255,.26), rgba(255,255,255,.10));
+      border-color: rgba(255,255,255,.32); transform: translateY(-1px);
+    }
+    .scdl-fab:active { transform: scale(.985); }
+    .scdl-fab:focus-visible { outline: 2px solid rgba(255,140,80,.8); outline-offset: 2px; }
     .scdl-fab-queue { flex: 0 0 auto; }
     .scdl-fab-queue[hidden] { display: none; }
     .scdl-badge {
       background: linear-gradient(145deg, #ff7a3c, #f50); color: #fff;
-      border-radius: 999px; padding: 1px 7px; font-size: 11px; font-weight: 700;
+      border-radius: 999px; padding: 2px 8px; font-size: 11.5px; font-weight: 700;
       box-shadow: 0 1px 4px rgba(255,85,0,.5);
     }
 
@@ -851,7 +871,7 @@
 
     .scdl-now {
       display: flex; align-items: center; gap: 9px;
-      max-width: 190px; padding: 6px 14px 6px 6px; border-radius: 999px;
+      height: var(--g-size); max-width: 212px; padding: 0 16px 0 6px; border-radius: 999px;
       overflow: hidden; -webkit-user-select: none; user-select: none;
       text-decoration: none; color: inherit; cursor: default;
       transition: transform .22s cubic-bezier(.2,.85,.3,1), background .16s ease, border-color .16s ease;
@@ -866,7 +886,7 @@
     .scdl-now[href]:hover .scdl-now-art { transform: scale(1.06); }
     .scdl-now-art { transition: transform .22s cubic-bezier(.2,.85,.3,1); }
     .scdl-now-art {
-      width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%;
+      width: 38px; height: 38px; flex: 0 0 38px; border-radius: 50%;
       background: rgba(255,255,255,.14) center/cover no-repeat;
       box-shadow: inset 0 0 0 1px rgba(255,255,255,.22), 0 1px 3px rgba(0,0,0,.3);
     }
@@ -885,7 +905,7 @@
     .scdl-now.scdl-swap .scdl-now-text { animation: scdl-swap .3s cubic-bezier(.2,.85,.3,1); }
 
     .scdl-fab-dl {
-      width: 52px; height: 52px; flex: 0 0 52px; padding: 0;
+      width: var(--g-size); height: var(--g-size); flex: 0 0 var(--g-size); padding: 0;
       display: grid; place-items: center; border-radius: 50%;
       color: #fff; cursor: pointer;
       background: linear-gradient(150deg, rgba(255,124,56,.95), rgba(255,68,0,.82));
@@ -900,7 +920,7 @@
       box-shadow: var(--g-drop), inset 0 1px 0 rgba(255,255,255,.45), 0 0 30px rgba(255,85,0,.45);
     }
     .scdl-fab-dl:active:not(:disabled) { transform: scale(.96); }
-    .scdl-fab-dl svg { width: 21px; height: 21px; position: relative; }
+    .scdl-fab-dl svg { width: 22px; height: 22px; position: relative; }
     .scdl-fab-dl:disabled {
       cursor: default;
       background: linear-gradient(150deg, rgba(255,255,255,.13), rgba(255,255,255,.05));
@@ -1633,23 +1653,42 @@
     // Mirrors downloadCurrent() exactly: on a track page the page always wins,
     // so the bubble can never show a different track than the button acts on.
     if (pageUrl) {
-      const titleEl = document.querySelector('.soundTitle__title span, .soundTitle__title');
-      const userEl = document.querySelector('.soundTitle__username span, .soundTitle__username');
-      const title = titleEl ? titleEl.textContent.trim() : '';
-      if (title) {
-        return {
-          url: pageUrl,
-          title,
-          artist: userEl ? userEl.textContent.trim() : '',
-          artwork: findArtwork(
-            document.querySelector('.listenArtworkWrapper') ||
-            document.querySelector('.fullListenHero') ||
-            document.querySelector('.l-listen-hero') ||
-            document.querySelector('.listenEngagement')
-          ),
-        };
+      if (trackInfoCache.has(pageUrl)) {
+        const cached = trackInfoCache.get(pageUrl);
+        if (cached) return cached;
+        // null = we already tried and failed; drop through to the slug.
+      } else {
+        const hydrated = hydrationTrack();
+        if (hydrated && hydrated.permalink_url === pageUrl) {
+          const info = infoFromTrack(hydrated);
+          cacheInfo(pageUrl, info);
+          return info;
+        }
+
+        // Older layout that still renders the hero in the top document.
+        const titleEl = document.querySelector('.soundTitle__title span, .soundTitle__title');
+        const title = titleEl ? titleEl.textContent.trim() : '';
+        if (title) {
+          const userEl = document.querySelector('.soundTitle__username span, .soundTitle__username');
+          const info = {
+            url: pageUrl,
+            title,
+            artist: userEl ? userEl.textContent.trim() : '',
+            artwork: findArtwork(
+              document.querySelector('.listenArtworkWrapper') ||
+              document.querySelector('.fullListenHero') ||
+              document.querySelector('.l-listen-hero') ||
+              document.querySelector('.listenEngagement')
+            ),
+          };
+          if (!info.artwork || !info.artist) scheduleTrackResolve(pageUrl); // fill the gaps
+          return info;
+        }
+
+        scheduleTrackResolve(pageUrl);
       }
-      // Hero has not rendered yet — show the slug meanwhile.
+
+      // Placeholder while the API answers.
       const slug = decodeURIComponent(pageUrl.split('/').pop() || '').replace(/-/g, ' ').trim();
       return { url: pageUrl, title: slug || pageUrl, artist: '', artwork: '' };
     }
@@ -1670,6 +1709,65 @@
     }
 
     return null;
+  }
+
+  /* Track pages render inside SoundCloud's own iframe (webiIframeV2Layout),
+     which @noframes keeps us out of, so the hero DOM is simply not present in
+     the top document. Read the hydration blob instead, and fall back to the
+     API — neither depends on any page markup. */
+
+  const trackInfoCache = new Map(); // permalink -> info, or null after a failure
+  const trackInfoPending = new Set();
+
+  function cacheInfo(url, info) {
+    if (trackInfoCache.size > 60) trackInfoCache.clear();
+    trackInfoCache.set(url, info);
+  }
+
+  const infoFromTrack = (track) => {
+    const meta = parseMeta(track);
+    return {
+      url: track.permalink_url,
+      title: meta.title,
+      artist: meta.artist,
+      artwork: artworkUrl(track, 't120x120') || '',
+    };
+  };
+
+  let hydrationPath = null;
+  let hydrationData = null;
+
+  function hydrationTrack() {
+    if (hydrationPath === location.pathname) return hydrationData;
+    hydrationPath = location.pathname;
+    hydrationData = null;
+    for (const el of document.querySelectorAll('script')) {
+      const txt = el.textContent;
+      if (!txt || txt.indexOf('__sc_hydration') === -1) continue;
+      const m = txt.match(/__sc_hydration\s*=\s*(\[[\s\S]*\]);/);
+      if (!m) break;
+      try {
+        const sound = JSON.parse(m[1]).find((h) => h && h.hydratable === 'sound');
+        if (sound && sound.data && sound.data.permalink_url) hydrationData = sound.data;
+      } catch (_) {
+        /* malformed hydration — fall through to the API */
+      }
+      break;
+    }
+    return hydrationData;
+  }
+
+  function scheduleTrackResolve(url) {
+    if (trackInfoPending.has(url) || trackInfoCache.has(url)) return;
+    trackInfoPending.add(url);
+    resolveTrack(url, new CancelToken())
+      .then((track) => cacheInfo(url, infoFromTrack(track)))
+      .catch(() => cacheInfo(url, null)) // remember failures so we stop retrying
+      .then(() => {
+        trackInfoPending.delete(url);
+        lastNowKey = null; // force a repaint now that the data is in
+        refreshNowBubble();
+      });
   }
 
   let lastNowKey = null;
