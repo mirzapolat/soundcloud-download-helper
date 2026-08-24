@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/mirzapolat/soundcloud-download-helper
 // @downloadURL  https://raw.githubusercontent.com/mirzapolat/soundcloud-download-helper/main/soundcloud-downloader.user.js
 // @updateURL    https://raw.githubusercontent.com/mirzapolat/soundcloud-download-helper/main/soundcloud-downloader.user.js
-// @version      1.4.0
+// @version      1.6.0
 // @description  Download SoundCloud tracks as MP3 with ID3v2 tags, metadata preview, cancel support, a batch download queue (ZIP) and a freely draggable button
 // @author       mirzapolat
 // @match        https://soundcloud.com/*
@@ -68,6 +68,7 @@
     clear: 'Clear',
     remove: 'Remove',
     nothingSelected: 'No track selected',
+    openTrack: 'Click to open the track page',
     inline: 'Download',
     loading: 'Loading track info …',
     preparing: 'Preparing …',
@@ -836,6 +837,7 @@
       transition: transform .22s cubic-bezier(.2,.85,.3,1), background .16s ease, border-color .16s ease;
     }
     .scdl-fab:hover { background: linear-gradient(145deg, rgba(255,255,255,.26), rgba(255,255,255,.10)); }
+    .scdl-fab-queue { flex: 0 0 auto; }
     .scdl-fab-queue[hidden] { display: none; }
     .scdl-badge {
       background: linear-gradient(145deg, #ff7a3c, #f50); color: #fff;
@@ -849,9 +851,20 @@
 
     .scdl-now {
       display: flex; align-items: center; gap: 9px;
-      max-width: 214px; padding: 6px 14px 6px 6px; border-radius: 999px;
+      max-width: 190px; padding: 6px 14px 6px 6px; border-radius: 999px;
       overflow: hidden; -webkit-user-select: none; user-select: none;
+      text-decoration: none; color: inherit; cursor: default;
+      transition: transform .22s cubic-bezier(.2,.85,.3,1), background .16s ease, border-color .16s ease;
     }
+    .scdl-now[href] { cursor: pointer; }
+    .scdl-now[href]:hover {
+      background: linear-gradient(145deg, rgba(255,255,255,.26), rgba(255,255,255,.10));
+      border-color: rgba(255,255,255,.32); transform: translateY(-1px);
+    }
+    .scdl-now[href]:active { transform: scale(.985); }
+    .scdl-now[href]:focus-visible { outline: 2px solid rgba(255,140,80,.8); outline-offset: 2px; }
+    .scdl-now[href]:hover .scdl-now-art { transform: scale(1.06); }
+    .scdl-now-art { transition: transform .22s cubic-bezier(.2,.85,.3,1); }
     .scdl-now-art {
       width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%;
       background: rgba(255,255,255,.14) center/cover no-repeat;
@@ -1589,7 +1602,28 @@
     if (!el) return '';
     const bg = getComputedStyle(el).backgroundImage;
     const m = bg && bg.match(/url\(["']?(.*?)["']?\)/);
-    return m ? m[1] : '';
+    const url = m ? m[1] : '';
+    return /^(https?:)?\/\//.test(url) ? url : '';
+  }
+
+  // SoundCloud wraps the real artwork in a sizing element that carries no
+  // background of its own, so a plain querySelector finds the empty wrapper.
+  // Walk every candidate and take the first that actually yields a URL.
+  function findArtwork(scope) {
+    if (!scope) return '';
+    const els = scope.querySelectorAll(
+      'span.sc-artwork, .image__full, [style*="background-image"], .sc-artwork, img'
+    );
+    for (const el of els) {
+      if (el.tagName === 'IMG') {
+        const src = el.currentSrc || el.src || '';
+        if (/^(https?:)?\/\//.test(src)) return src;
+        continue;
+      }
+      const url = bgUrl(el);
+      if (url) return url;
+    }
+    return '';
   }
 
   // Whatever Alt+D would act on: the track page you are on, else what is playing.
@@ -1607,7 +1641,12 @@
           url: pageUrl,
           title,
           artist: userEl ? userEl.textContent.trim() : '',
-          artwork: bgUrl(document.querySelector('.listenArtworkWrapper .sc-artwork, .listenArtworkWrapper span[style*="background-image"]')),
+          artwork: findArtwork(
+            document.querySelector('.listenArtworkWrapper') ||
+            document.querySelector('.fullListenHero') ||
+            document.querySelector('.l-listen-hero') ||
+            document.querySelector('.listenEngagement')
+          ),
         };
       }
       // Hero has not rendered yet — show the slug meanwhile.
@@ -1625,7 +1664,7 @@
           url: link.href.split('?')[0],
           title,
           artist: artistEl ? (artistEl.getAttribute('title') || artistEl.textContent || '').trim() : '',
-          artwork: bgUrl(badge.querySelector('.sc-artwork, span[style*="background-image"]')),
+          artwork: findArtwork(badge),
         };
       }
     }
@@ -1658,7 +1697,8 @@
       artistEl.textContent = info.artist;
       artistEl.hidden = !info.artist;
       artEl.style.backgroundImage = info.artwork ? `url("${info.artwork}")` : '';
-      bubble.title = info.artist ? `${info.artist} — ${info.title}` : info.title;
+      bubble.href = info.url;
+      bubble.title = `${info.artist ? info.artist + ' — ' : ''}${info.title}\n${T.openTrack}`;
       dl.disabled = false;
       dl.title = T.downloadTitle(info.title);
     } else {
@@ -1667,6 +1707,7 @@
       artistEl.textContent = '';
       artistEl.hidden = true;
       artEl.style.backgroundImage = '';
+      bubble.removeAttribute('href'); // an anchor without href is inert
       bubble.title = T.nothingSelected;
       dl.disabled = true;
       dl.title = T.noTrack;
@@ -1723,7 +1764,7 @@
     queueBtn.hidden = true;
     queueBtn.addEventListener('click', openQueuePanel);
 
-    const bubble = document.createElement('div');
+    const bubble = document.createElement('a');
     bubble.className = 'scdl-now scdl-glass scdl-now-empty';
     bubble.innerHTML =
       '<span class="scdl-now-art"></span>' +
@@ -1746,7 +1787,8 @@
 
     const dock = document.createElement('div');
     dock.className = 'scdl-dock';
-    dock.append(bubble, dlBtn);
+    // Order: bubble · queue · download (mirrored when docked to the left edge).
+    dock.append(bubble, queueBtn, dlBtn);
 
     const grip = document.createElement('button');
     grip.className = 'scdl-grip scdl-glass';
@@ -1755,7 +1797,7 @@
     grip.setAttribute('aria-label', T.dragHint);
     grip.innerHTML = '<i></i><i></i><i></i><i></i><i></i><i></i>';
 
-    wrap.append(grip, queueBtn, dock);
+    wrap.append(grip, dock);
     document.body.appendChild(wrap);
 
     applyFabPos(wrap, loadFabPos());

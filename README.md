@@ -15,8 +15,8 @@ Or do it by hand: dashboard → new script → paste `soundcloud-downloader.user
 
 A **Download** button shows up next to Like and Repost on every track. In the corner
 sits a floating one, with a bubble next to it naming whatever it would grab right now —
-the track page you're on, or whatever is playing. Nothing selected, and it greys out.
-`Alt+D` does the same thing.
+the track page you're on, or whatever is playing. Click the bubble to open that track;
+when nothing is selected it goes quiet and the button greys out. `Alt+D` downloads.
 
 Before anything downloads you get a small preview — cover, title, artist, duration,
 quality, and the filename you're about to get. Confirm or cancel.
