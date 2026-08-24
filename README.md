@@ -4,12 +4,19 @@ A Tampermonkey userscript that downloads SoundCloud tracks as MP3 with proper ta
 
 ## Install
 
-Open the Tampermonkey dashboard, create a new script, paste `soundcloud-downloader.user.js`, save.
+**[→ Install](https://raw.githubusercontent.com/mirzapolat/soundcloud-download-helper/main/soundcloud-downloader.user.js)**
+
+With Tampermonkey installed, that link opens its install screen directly. Updates work
+the same way — Tampermonkey checks the file itself and offers new versions.
+
+Or do it by hand: dashboard → new script → paste `soundcloud-downloader.user.js` → save.
 
 ## Using it
 
-A **Download** button shows up next to Like and Repost on every track, plus a floating
-button in the corner for whatever is playing. `Alt+D` does the same.
+A **Download** button shows up next to Like and Repost on every track. In the corner
+sits a floating one, with a bubble next to it naming whatever it would grab right now —
+the track page you're on, or whatever is playing. Nothing selected, and it greys out.
+`Alt+D` does the same thing.
 
 Before anything downloads you get a small preview — cover, title, artist, duration,
 quality, and the filename you're about to get. Confirm or cancel.
@@ -20,8 +27,8 @@ so you can fill it over a few days. `Alt+Q` queues the current track.
 
 Anything running can be cancelled — button, `Esc`, or a click outside the dialog.
 
-The floating button can be dragged anywhere on the page. Hover it and a small grip
-appears above it; drag it where you want and it stays there, across reloads.
+The whole floating cluster can be dragged anywhere on the page. Hover it and a small
+grip appears above it; drag it where you want and it stays there, across reloads.
 Drop it near an edge and it snaps flush. Double-click the grip to put it back.
 
 ## Tags

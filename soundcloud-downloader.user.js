@@ -1,7 +1,10 @@
 // ==UserScript==
 // @name         SoundCloud Downloader (with ID3 metadata)
 // @namespace    https://github.com/mirzapolat/userscripts
-// @version      1.3.0
+// @homepageURL  https://github.com/mirzapolat/soundcloud-download-helper
+// @downloadURL  https://raw.githubusercontent.com/mirzapolat/soundcloud-download-helper/main/soundcloud-downloader.user.js
+// @updateURL    https://raw.githubusercontent.com/mirzapolat/soundcloud-download-helper/main/soundcloud-downloader.user.js
+// @version      1.4.0
 // @description  Download SoundCloud tracks as MP3 with ID3v2 tags, metadata preview, cancel support, a batch download queue (ZIP) and a freely draggable button
 // @author       mirzapolat
 // @match        https://soundcloud.com/*
@@ -64,7 +67,7 @@
     close: 'Close',
     clear: 'Clear',
     remove: 'Remove',
-    fab: '↓ Download',
+    nothingSelected: 'No track selected',
     inline: 'Download',
     loading: 'Loading track info …',
     preparing: 'Preparing …',
@@ -80,6 +83,7 @@
     untagged: 'Only AAC available → saved as .m4a without tags.',
     by: 'by',
     dragHint: 'Drag to move · double-click to reset · arrow keys to nudge',
+    downloadTitle: (t) => `Download "${t}" · Alt+D · Alt+Q to queue`,
     queued: 'Added to queue',
     alreadyQueued: 'Already in the queue.',
     queueEmpty: 'The queue is empty. Use the + button next to any track.',
@@ -766,53 +770,132 @@
    * ------------------------------------------------------------------ */
 
   GM_addStyle(`
+    /* ---- liquid glass tokens ---- */
     .scdl-fabs {
       position: fixed; right: 18px; bottom: 90px; z-index: 2147483000;
-      display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
       transition: left .22s cubic-bezier(.2,.85,.3,1), top .22s cubic-bezier(.2,.85,.3,1);
+      --g-fill: linear-gradient(145deg, rgba(255,255,255,.17), rgba(255,255,255,.05) 55%, rgba(255,255,255,.10));
+      --g-edge: rgba(255,255,255,.22);
+      --g-drop: 0 10px 34px rgba(0,0,0,.42), 0 2px 8px rgba(0,0,0,.26);
+      --g-inner: inset 0 1px 0 rgba(255,255,255,.30), inset 0 -1px 0 rgba(255,255,255,.07);
+      --g-blur: blur(22px) saturate(185%);
     }
     .scdl-fabs.scdl-anchor-left { align-items: flex-start; }
-    .scdl-fabs.scdl-dragging { transition: none; }
+    .scdl-fabs.scdl-dragging { transition: none; filter: drop-shadow(0 14px 30px rgba(0,0,0,.45)); }
     /* Swallow clicks on the buttons while dragging. */
-    .scdl-fabs.scdl-dragging .scdl-fab { pointer-events: none; }
+    .scdl-fabs.scdl-dragging .scdl-fab,
+    .scdl-fabs.scdl-dragging .scdl-fab-dl { pointer-events: none; }
 
+    /* Frosted pane + specular sheen. ::before paints above the background but
+       below the text, so content stays legible. */
+    .scdl-glass {
+      position: relative;
+      background: var(--g-fill);
+      -webkit-backdrop-filter: var(--g-blur);
+      backdrop-filter: var(--g-blur);
+      border: 1px solid var(--g-edge);
+      box-shadow: var(--g-drop), var(--g-inner);
+    }
+    .scdl-glass::before {
+      content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+      background: radial-gradient(135% 95% at 26% -12%, rgba(255,255,255,.40), rgba(255,255,255,0) 58%);
+      opacity: .8;
+    }
+
+    /* ---- drag grip ---- */
     .scdl-grip {
       display: grid; grid-template-columns: repeat(3, 3px); gap: 3px;
       justify-content: center; align-content: center;
-      width: 38px; height: 20px; padding: 0; margin-bottom: -2px;
-      border-radius: 10px; border: 1px solid #3a3a3a;
-      background: rgba(26,26,26,.92); box-shadow: 0 2px 10px rgba(0,0,0,.3);
-      cursor: grab; touch-action: none; -webkit-user-select: none; user-select: none;
+      width: 40px; height: 20px; padding: 0; margin-bottom: -3px;
+      border-radius: 10px; cursor: grab; touch-action: none;
+      -webkit-user-select: none; user-select: none;
       opacity: 0; transform: translateY(6px) scale(.94);
-      transition: opacity .18s ease, transform .18s cubic-bezier(.2,.85,.3,1),
-                  background .15s ease, border-color .15s ease;
+      transition: opacity .2s ease, transform .2s cubic-bezier(.2,.85,.3,1),
+                  background .16s ease, border-color .16s ease;
     }
-    .scdl-grip > i { width: 3px; height: 3px; border-radius: 50%; background: #8a8a8a; transition: background .15s; }
+    .scdl-grip > i { width: 3px; height: 3px; border-radius: 50%; background: rgba(255,255,255,.6); transition: background .16s; }
     .scdl-fabs:hover .scdl-grip,
     .scdl-fabs:focus-within .scdl-grip,
     .scdl-fabs.scdl-dragging .scdl-grip { opacity: 1; transform: none; }
-    .scdl-grip:hover, .scdl-grip:focus-visible { background: #f50; border-color: #f50; outline: none; }
-    .scdl-grip:hover > i, .scdl-grip:focus-visible > i { background: #fff; }
-    .scdl-fabs.scdl-dragging .scdl-grip { cursor: grabbing; background: #f50; border-color: #f50; }
+    .scdl-grip:hover, .scdl-grip:focus-visible,
+    .scdl-fabs.scdl-dragging .scdl-grip {
+      background: linear-gradient(145deg, rgba(255,120,50,.85), rgba(255,68,0,.7));
+      border-color: rgba(255,140,80,.6); outline: none;
+    }
+    .scdl-grip:hover > i, .scdl-grip:focus-visible > i,
     .scdl-fabs.scdl-dragging .scdl-grip > i { background: #fff; }
-    .scdl-fabs.scdl-dragging .scdl-fab { transform: scale(1.04); }
-    .scdl-fabs.scdl-dragging { filter: drop-shadow(0 12px 26px rgba(0,0,0,.45)); }
+    .scdl-fabs.scdl-dragging .scdl-grip { cursor: grabbing; }
 
+    /* ---- queue pill ---- */
     .scdl-fab {
       display: flex; align-items: center; gap: 8px;
-      padding: 10px 14px; border: 0; border-radius: 999px;
-      background: #f50; color: #fff; font: 600 13px/1 Inter, system-ui, sans-serif;
-      cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.35);
-      transition: background .15s ease, transform .22s cubic-bezier(.2,.85,.3,1);
+      padding: 9px 14px; border-radius: 999px;
+      color: #fff; font: 600 12.5px/1 Inter, system-ui, sans-serif;
+      cursor: pointer;
+      transition: transform .22s cubic-bezier(.2,.85,.3,1), background .16s ease, border-color .16s ease;
     }
-    .scdl-fab:hover { background: #ff6a1f; }
-    .scdl-fab-queue { background: #333; }
-    .scdl-fab-queue:hover { background: #444; }
+    .scdl-fab:hover { background: linear-gradient(145deg, rgba(255,255,255,.26), rgba(255,255,255,.10)); }
     .scdl-fab-queue[hidden] { display: none; }
     .scdl-badge {
-      background: #f50; color: #fff; border-radius: 999px;
-      padding: 1px 7px; font-size: 11px; font-weight: 700;
+      background: linear-gradient(145deg, #ff7a3c, #f50); color: #fff;
+      border-radius: 999px; padding: 1px 7px; font-size: 11px; font-weight: 700;
+      box-shadow: 0 1px 4px rgba(255,85,0,.5);
     }
+
+    /* ---- bubble + round download button ---- */
+    .scdl-dock { display: flex; align-items: center; gap: 10px; }
+    .scdl-fabs.scdl-anchor-left .scdl-dock { flex-direction: row-reverse; }
+
+    .scdl-now {
+      display: flex; align-items: center; gap: 9px;
+      max-width: 214px; padding: 6px 14px 6px 6px; border-radius: 999px;
+      overflow: hidden; -webkit-user-select: none; user-select: none;
+    }
+    .scdl-now-art {
+      width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%;
+      background: rgba(255,255,255,.14) center/cover no-repeat;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.22), 0 1px 3px rgba(0,0,0,.3);
+    }
+    .scdl-now-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .scdl-now-title {
+      font: 600 12px/1.3 Inter, system-ui, sans-serif; color: #fff;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .scdl-now-artist {
+      font: 400 11px/1.2 Inter, system-ui, sans-serif; color: rgba(255,255,255,.62);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .scdl-now-empty .scdl-now-title { color: rgba(255,255,255,.5); font-weight: 500; }
+    .scdl-now-empty .scdl-now-art { opacity: .45; }
+    @keyframes scdl-swap { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+    .scdl-now.scdl-swap .scdl-now-text { animation: scdl-swap .3s cubic-bezier(.2,.85,.3,1); }
+
+    .scdl-fab-dl {
+      width: 52px; height: 52px; flex: 0 0 52px; padding: 0;
+      display: grid; place-items: center; border-radius: 50%;
+      color: #fff; cursor: pointer;
+      background: linear-gradient(150deg, rgba(255,124,56,.95), rgba(255,68,0,.82));
+      border: 1px solid rgba(255,150,100,.5);
+      box-shadow: var(--g-drop), inset 0 1px 0 rgba(255,255,255,.38), 0 0 22px rgba(255,85,0,.28);
+      -webkit-backdrop-filter: var(--g-blur); backdrop-filter: var(--g-blur);
+      transition: transform .22s cubic-bezier(.2,.85,.3,1), box-shadow .2s ease,
+                  background .2s ease, border-color .2s ease, opacity .2s ease;
+    }
+    .scdl-fab-dl:hover:not(:disabled) {
+      transform: translateY(-1px) scale(1.05);
+      box-shadow: var(--g-drop), inset 0 1px 0 rgba(255,255,255,.45), 0 0 30px rgba(255,85,0,.45);
+    }
+    .scdl-fab-dl:active:not(:disabled) { transform: scale(.96); }
+    .scdl-fab-dl svg { width: 21px; height: 21px; position: relative; }
+    .scdl-fab-dl:disabled {
+      cursor: default;
+      background: linear-gradient(150deg, rgba(255,255,255,.13), rgba(255,255,255,.05));
+      border-color: rgba(255,255,255,.16);
+      color: rgba(255,255,255,.34);
+      box-shadow: 0 6px 18px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.16);
+    }
+
     .scdl-inline { margin-left: 4px !important; }
     .scdl-inline-add { margin-left: 2px !important; min-width: 0 !important; padding: 0 8px !important; }
 
@@ -1498,6 +1581,108 @@
     });
   }
 
+  /* ------------------------------------------------------------------ *
+   * Currently selected track (for the bubble)
+   * ------------------------------------------------------------------ */
+
+  function bgUrl(el) {
+    if (!el) return '';
+    const bg = getComputedStyle(el).backgroundImage;
+    const m = bg && bg.match(/url\(["']?(.*?)["']?\)/);
+    return m ? m[1] : '';
+  }
+
+  // Whatever Alt+D would act on: the track page you are on, else what is playing.
+  function getCurrentTrackInfo() {
+    const pageUrl = trackUrlFromLocation();
+
+    // Mirrors downloadCurrent() exactly: on a track page the page always wins,
+    // so the bubble can never show a different track than the button acts on.
+    if (pageUrl) {
+      const titleEl = document.querySelector('.soundTitle__title span, .soundTitle__title');
+      const userEl = document.querySelector('.soundTitle__username span, .soundTitle__username');
+      const title = titleEl ? titleEl.textContent.trim() : '';
+      if (title) {
+        return {
+          url: pageUrl,
+          title,
+          artist: userEl ? userEl.textContent.trim() : '',
+          artwork: bgUrl(document.querySelector('.listenArtworkWrapper .sc-artwork, .listenArtworkWrapper span[style*="background-image"]')),
+        };
+      }
+      // Hero has not rendered yet — show the slug meanwhile.
+      const slug = decodeURIComponent(pageUrl.split('/').pop() || '').replace(/-/g, ' ').trim();
+      return { url: pageUrl, title: slug || pageUrl, artist: '', artwork: '' };
+    }
+
+    const badge = document.querySelector('.playbackSoundBadge');
+    const link = badge && badge.querySelector('.playbackSoundBadge__titleLink');
+    if (link) {
+      const artistEl = badge.querySelector('.playbackSoundBadge__lightLink');
+      const title = (link.getAttribute('title') || link.textContent || '').trim();
+      if (title) {
+        return {
+          url: link.href.split('?')[0],
+          title,
+          artist: artistEl ? (artistEl.getAttribute('title') || artistEl.textContent || '').trim() : '',
+          artwork: bgUrl(badge.querySelector('.sc-artwork, span[style*="background-image"]')),
+        };
+      }
+    }
+
+    return null;
+  }
+
+  let lastNowKey = null;
+
+  function refreshNowBubble() {
+    const wrap = document.querySelector('.scdl-fabs');
+    if (!wrap) return;
+    const bubble = wrap.querySelector('.scdl-now');
+    const dl = wrap.querySelector('.scdl-fab-dl');
+    if (!bubble || !dl) return;
+
+    const info = getCurrentTrackInfo();
+    const key = info ? [info.url, info.title, info.artist, info.artwork].join('|') : '';
+    if (key === lastNowKey) return; // nothing changed, skip the DOM work
+    const first = lastNowKey === null;
+    lastNowKey = key;
+
+    const titleEl = bubble.querySelector('.scdl-now-title');
+    const artistEl = bubble.querySelector('.scdl-now-artist');
+    const artEl = bubble.querySelector('.scdl-now-art');
+
+    if (info) {
+      bubble.classList.remove('scdl-now-empty');
+      titleEl.textContent = info.title;
+      artistEl.textContent = info.artist;
+      artistEl.hidden = !info.artist;
+      artEl.style.backgroundImage = info.artwork ? `url("${info.artwork}")` : '';
+      bubble.title = info.artist ? `${info.artist} — ${info.title}` : info.title;
+      dl.disabled = false;
+      dl.title = T.downloadTitle(info.title);
+    } else {
+      bubble.classList.add('scdl-now-empty');
+      titleEl.textContent = T.nothingSelected;
+      artistEl.textContent = '';
+      artistEl.hidden = true;
+      artEl.style.backgroundImage = '';
+      bubble.title = T.nothingSelected;
+      dl.disabled = true;
+      dl.title = T.noTrack;
+    }
+
+    if (!first) {
+      bubble.classList.remove('scdl-swap');
+      void bubble.offsetWidth; // restart the fade
+      bubble.classList.add('scdl-swap');
+    }
+
+    // The bubble width changes with the title, so re-clamp a saved position.
+    const pos = loadFabPos();
+    if (pos) applyFabPos(wrap, pos);
+  }
+
   function downloadCurrent() {
     const url = trackUrlFromLocation() || nowPlayingUrl();
     if (!url) {
@@ -1531,33 +1716,52 @@
     wrap.className = 'scdl-fabs';
 
     const queueBtn = document.createElement('button');
-    queueBtn.className = 'scdl-fab scdl-fab-queue';
+    queueBtn.className = 'scdl-fab scdl-fab-queue scdl-glass';
     queueBtn.type = 'button';
     queueBtn.title = 'Open download queue';
     queueBtn.innerHTML = `${escapeHtml(T.queue)} <span class="scdl-badge">0</span>`;
     queueBtn.hidden = true;
     queueBtn.addEventListener('click', openQueuePanel);
 
+    const bubble = document.createElement('div');
+    bubble.className = 'scdl-now scdl-glass scdl-now-empty';
+    bubble.innerHTML =
+      '<span class="scdl-now-art"></span>' +
+      '<span class="scdl-now-text">' +
+      `<span class="scdl-now-title">${escapeHtml(T.nothingSelected)}</span>` +
+      '<span class="scdl-now-artist" hidden></span>' +
+      '</span>';
+
     const dlBtn = document.createElement('button');
-    dlBtn.className = 'scdl-fab';
+    dlBtn.className = 'scdl-fab-dl';
     dlBtn.type = 'button';
-    dlBtn.title = 'Download this track (Alt+D) · add to queue (Alt+Q)';
-    dlBtn.textContent = T.fab;
+    dlBtn.disabled = true;
+    dlBtn.title = T.noTrack;
+    dlBtn.setAttribute('aria-label', T.download);
+    dlBtn.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M12 3.5v11"/><path d="m7.2 10.3 4.8 4.8 4.8-4.8"/><path d="M4.5 19.5h15"/></svg>';
     dlBtn.addEventListener('click', downloadCurrent);
 
+    const dock = document.createElement('div');
+    dock.className = 'scdl-dock';
+    dock.append(bubble, dlBtn);
+
     const grip = document.createElement('button');
-    grip.className = 'scdl-grip';
+    grip.className = 'scdl-grip scdl-glass';
     grip.type = 'button';
     grip.title = T.dragHint;
     grip.setAttribute('aria-label', T.dragHint);
     grip.innerHTML = '<i></i><i></i><i></i><i></i><i></i><i></i>';
 
-    wrap.append(grip, queueBtn, dlBtn);
+    wrap.append(grip, queueBtn, dock);
     document.body.appendChild(wrap);
 
     applyFabPos(wrap, loadFabPos());
     makeFabDraggable(wrap, grip);
     updateQueueBadge();
+    refreshNowBubble();
   }
 
   function trackUrlForNode(node) {
@@ -1660,6 +1864,7 @@
       scheduled = false;
       addFabs();
       injectInlineButtons();
+      refreshNowBubble();
     }, 400);
   }).observe(document.body, { childList: true, subtree: true });
 })();
